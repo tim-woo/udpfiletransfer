@@ -25,14 +25,14 @@
 #define PAYLOAD_SIZE 991
 
 #define MAXSEQNUMS 4294967000 // 2^32-1 floor 1000
-#define TIMEOUT 2
+#define TIMEOUT 3
 
 typedef enum fileType {ACK,REQ} fileType;
 
 int sockfd, sendfd;
 unsigned int nextSeqNum, numPackets, total_payload_sent, base, file_base, fsize, cwnd;
 char* portno;
-int finished, probloss, probcorrupt;
+int doneWriting, finished, probloss, probcorrupt;
 fileType expectedType;
 struct sockaddr_in their_addr;
 
@@ -58,8 +58,9 @@ int checkNextSeq(int nextSeq, int base, int cwnd) {
 
 int noPacketLoss() {
 	int r = rand()%100;
+	printf("rand: %d \n", r);
 	if (r < probloss) {
-		// printf("sent packet loss\n");
+		printf("sent packet loss: %d < %d \n", r, probloss);
 		return 0;	// packet loss
 	}
 	else {
@@ -204,7 +205,7 @@ int main(int argc, char* argv[])
 	expectedType = REQ;
 	finished = 0;
 	total_payload_sent = 0;			// keeps running count of bytes sent, reset to file_base when timeout occurs
-
+	doneWriting = 0;
 	int sb = 0;
 	int bytesread = 0;
 	char fbuf[PACKET_SIZE];	// file name buffer
@@ -212,12 +213,11 @@ int main(int argc, char* argv[])
 	
 	for (;;) {
 		// if (expectedType == ACK && nextSeqNum < base + cwnd) {
-		if (expectedType == ACK && checkNextSeq(nextSeqNum,base,cwnd)==1) {
+		if (!doneWriting && expectedType == ACK && checkNextSeq(nextSeqNum,base,cwnd)==1) {
 			if ((bytesread = read(sendfd, fbuf + HEADER_SIZE, PAYLOAD_SIZE)) > 0) {
 				memcpy(fbuf, (char *)&nextSeqNum, 4);
 				memcpy(fbuf+4, &bytesread, 4);
-				fbuf[8] = (char)((fsize == total_payload_sent+HEADER_SIZE+bytesread) ? 1 : 0);
-				// fbuf[8] = (char)((packet_no + 1) == numPackets ? 1 : 0);
+				fbuf[8] = (char)((fsize == total_payload_sent+bytesread) ? 1 : 0);				
 
 				if (noPacketLoss()) {
 					sb = sendto(sockfd, fbuf, HEADER_SIZE + bytesread, 0,
@@ -227,8 +227,10 @@ int main(int argc, char* argv[])
 					printf("**Packet with SEQ # %d was sent but lost**\n", nextSeqNum);
 				}
 
-				printf("\n(bytes read: %d 	total_payload_sent: %d 	fsize: %d nextSeqNum: %d)\n", bytesread, total_payload_sent, fsize, nextSeqNum);
-
+				if ((int)fbuf[8] == 1) {
+					printf("*** Sent last packet with %d bytes\n", bytesread);
+					doneWriting = 1;
+				}
 				
 				if (base == nextSeqNum) {
 					alarm(TIMEOUT);
@@ -238,9 +240,19 @@ int main(int argc, char* argv[])
 				
 				bzero(fbuf, PACKET_SIZE);
 			} else { 
-				if (finished == 1) {
-					break;
-				}
+				printf("Nothing to read, bytesread: %d\n", bytesread);
+			}
+		}
+		else {
+			if (finished) {
+				int i = 0;
+				memcpy(fbuf, (char *)&nextSeqNum, 4);
+				memcpy(fbuf+4, &i, 4);
+				fbuf[8] = (char)2;
+				sendto(sockfd, fbuf, HEADER_SIZE, 0,
+						(struct sockaddr *)&their_addr, sizeof(their_addr));
+				printf("\nFile transfer complete. Sent %d of %d bytes\n", fsize, fsize);	
+				break;
 			}
 		}
 	}
@@ -292,7 +304,7 @@ void io_handler(int sig)
 			memcpy(&ack_num, pbuf+1,4);
 			if (notCorrupt()) {
 				// ack_num = (unsigned char)pbuf[1];
-				printf("			recv: ACK # %d", ack_num);
+				printf("recv: ACK # %d", ack_num);
 				int cnt = 0;
 				unsigned int tmp = base;
 				base = (ack_num + PACKET_SIZE) % MAXSEQNUMS;	// Cumulative ACK
@@ -307,7 +319,7 @@ void io_handler(int sig)
 
 				file_base += cnt * PAYLOAD_SIZE;	// increase base file position by that # of packet's payload size
 
-				printf("	file position: %d\n", file_base);
+				printf("	file position: %d 	fsize:%d\n", file_base, fsize);
 
 				if (file_base >= fsize) {
 					finished = 1;	
@@ -341,6 +353,7 @@ void catch_alarm(int sig)
 	lseek(sendfd, (off_t)file_base, SEEK_SET);
 
 	// Reset variables
+	doneWriting = 0;
 	total_payload_sent = file_base; // restarts sending from file_base
 	nextSeqNum = base;
 }

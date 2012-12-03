@@ -144,6 +144,7 @@ int main(int argc, char *argv[])
 
 	// PREPARE FOR GO-BACK-N PROTOCOL
 	unsigned int expectedSeqNum = 0;
+	unsigned int lastReceivedSeqNum = 0;
 	int addr_len;
 	unsigned int last_packet = 0;
 	char buf[PACKET_SIZE];
@@ -162,28 +163,35 @@ int main(int argc, char *argv[])
 			perror("recvfrom error");
 			exit(1);
 		}
+
 		unsigned packetSeqNum = 0;
 		memcpy(&packetSeqNum, buf, 4);
 		if (notCorrupt(probcorrupt)) {
-			printf("Expecting Seq: %d - Received Seq %d\n",expectedSeqNum, packetSeqNum);
+			printf("rcv: %d 	expected: %d\n", packetSeqNum, expectedSeqNum);
 			if (expectedSeqNum == packetSeqNum) {
 				if ((int)buf[8] == 1) {
 					printf("recv: last_packet\n");
 					last_packet = 1;
 				}
+				else if ((int)buf[8] == 2) {
+					printf("File transfer complete.\n");
+					break;
+				}
 				
 				unsigned int payload_size = 0;
 				memcpy(&payload_size, buf+4, 4);
 				unsigned int bytesWrote = 0;
+				// WRITE TO FILE
 				if (bytesWrote = write(fd, buf+HEADER_SIZE, payload_size) < 0) {
 					perror("write error");
 					exit(1);
 				}
 
 				// Make packet to send back
-				ackPacket[0] = ACK; // PACKET TYPE
+				ackPacket[0] = ACK;
 				memcpy(ackPacket+1, &expectedSeqNum, 4);
 
+				// SEND ACK
 				if (noPacketLoss(probloss) == 1) {
 				 	if ((numbytes = sendto(sockfd, ackPacket, PACKET_SIZE, 0,
 							 p->ai_addr, p->ai_addrlen)) == -1) {
@@ -196,20 +204,29 @@ int main(int argc, char *argv[])
 
 				printf("sent: ACK # %d\n", expectedSeqNum);
 
+				// UPDATE EXPECTED SEQ NUM
+				lastReceivedSeqNum = expectedSeqNum;
 				expectedSeqNum = (expectedSeqNum + HEADER_SIZE+payload_size) % MAXSEQNUMS;
 				printf("Set expectedSeqNum to: %d after receiving SEQ: %d payload: %d\n", expectedSeqNum, packetSeqNum, payload_size);
 
-				if (last_packet) {
-					break;
-				}
 				bzero(buf, PACKET_SIZE);
+				bzero(ackPacket, PACKET_SIZE);
+			}
+			else {
+				ackPacket[0] = ACK;
+				memcpy(ackPacket+1, &lastReceivedSeqNum, 4);
+				if ((numbytes = sendto(sockfd, ackPacket, PACKET_SIZE, 0,
+							 p->ai_addr, p->ai_addrlen)) == -1) {
+						perror("talker: sendto");
+						exit(1);
+				}
+				printf("sent: ACK # %d - lastReceivedSeqNum \n", lastReceivedSeqNum);
 				bzero(ackPacket, PACKET_SIZE);
 			}
 		} else {
 			printf("**Packet with seq # %d CORRUPTED**\n", packetSeqNum);
 			bzero(buf, PACKET_SIZE);
 		}
-		
 	}
 
 	freeaddrinfo(servinfo);
