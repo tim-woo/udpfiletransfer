@@ -167,7 +167,7 @@ int main(int argc, char *argv[])
 		unsigned packetSeqNum = 0;
 		memcpy(&packetSeqNum, buf, 4);
 		if (notCorrupt(probcorrupt)) {
-			printf("rcv: %d 	expected: %d\n", packetSeqNum, expectedSeqNum);
+			printf("rcv : SEQ %d 			expected: %d\n", packetSeqNum, expectedSeqNum);
 			if (expectedSeqNum == packetSeqNum) {
 				if ((int)buf[8] == 1) {
 					printf("recv: last_packet\n");
@@ -207,7 +207,6 @@ int main(int argc, char *argv[])
 				// UPDATE EXPECTED SEQ NUM
 				lastReceivedSeqNum = expectedSeqNum;
 				expectedSeqNum = (expectedSeqNum + HEADER_SIZE+payload_size) % MAXSEQNUMS;
-				printf("Set expectedSeqNum to: %d after receiving SEQ: %d payload: %d\n", expectedSeqNum, packetSeqNum, payload_size);
 
 				bzero(buf, PACKET_SIZE);
 				bzero(ackPacket, PACKET_SIZE);
@@ -220,7 +219,7 @@ int main(int argc, char *argv[])
 						perror("talker: sendto");
 						exit(1);
 				}
-				printf("sent: ACK # %d - lastReceivedSeqNum \n", lastReceivedSeqNum);
+				printf("sent: ACK # %d\n", lastReceivedSeqNum);
 				bzero(ackPacket, PACKET_SIZE);
 			}
 		} else {
