@@ -98,6 +98,15 @@ int main(int argc, char* argv[])
 	char s[INET6_ADDRSTRLEN];		// IPv6 variables
     char ipstr[INET6_ADDRSTRLEN];
 
+    // Initialize Globals
+    nextSeqNum = 0;			// in terms of bytes
+	base = 0;				// in terms of bytes
+	file_base = 0;			// in terms of bytes
+	expectedType = REQ;
+	finished = 0;
+	total_payload_sent = 0;			// keeps running count of bytes sent, reset to file_base when timeout occurs
+	doneWriting = 0;
+
     if (argc != 5) {
 		fprintf(stderr,"usage: server portnumber cwnd probloss probcorrupt\n");
 		exit(1);
@@ -113,7 +122,7 @@ int main(int argc, char* argv[])
     	exit(1);
     }
 
-    // simulate packet loss
+    // Simulate packet loss
     srand((unsigned)time(NULL));
 
     // Set hints for DNS lookup
@@ -193,19 +202,7 @@ int main(int argc, char* argv[])
 
 	printf("waiting to recvfrom...\n");
 
-
-	nextSeqNum = 0;			// in terms of bytes
-	base = 0;				// in terms of bytes
-	file_base = 0;			// in terms of bytes
-	expectedType = REQ;
-	finished = 0;
-	total_payload_sent = 0;			// keeps running count of bytes sent, reset to file_base when timeout occurs
-	doneWriting = 0;
-	int sb = 0;
-	int bytesread = 0;
-	char fbuf[PACKET_SIZE];	// file name buffer
-	bzero(fbuf, PACKET_SIZE);
-	
+	// Wait for recvfrom
 	for (;;) {}
 
 	return 0;
@@ -242,6 +239,7 @@ void io_handler(int sig)
 		else {
 			fileType type = (pbuf[0]=='R' ? REQ : ACK);
 
+			// Receive file request
 			if (type == REQ) {
 				fname = pbuf + 1;
 
@@ -250,6 +248,14 @@ void io_handler(int sig)
 				sendfd = open(fname, O_RDONLY);
 				if (sendfd == -1) {
 					perror("No file found");
+
+					// Send error code
+					char buf[HEADER_SIZE];
+					bzero(buf, HEADER_SIZE);
+					buf[8] = (char)4;
+					sendto(sockfd, buf, HEADER_SIZE, 0,
+						(struct sockaddr *)&their_addr, sizeof(their_addr));
+
 					exit(1);
 				}
 
@@ -260,17 +266,18 @@ void io_handler(int sig)
 				// Allow for sending of file
 				expectedType = ACK;
 			}
-			
+
+			// Receive ACK
 			else if (type == ACK) {
-				memcpy(&ack_num, pbuf+1,4);
+				memcpy(&ack_num, pbuf + 1, 4);
+				
 				if (notCorrupt()) {
-					// ack_num = (unsigned char)pbuf[1];
 					printf("recv: ACK # %d", ack_num);
 					int cnt = 0;
 					unsigned int tmp = base;
 					base = (ack_num + PACKET_SIZE) % MAXSEQNUMS;	// Cumulative ACK
 					
-					printf("	new base: %d", base);
+					printf("		new base: %d     end of window: %d     next SEQ #: %d\n", base, base + cwnd, nextSeqNum);
 
 					// calculate new file position base
 					while (tmp != base) {
@@ -279,13 +286,14 @@ void io_handler(int sig)
 					}
 
 					file_base += cnt * PAYLOAD_SIZE;	// increase base file position by that # of packet's payload size
-
-					printf("	file position: %d 	fsize:%d\n", file_base, fsize);
+					
 
 					if (file_base >= fsize) {
 						finished = 1;
-						printf("					^^ file position actually at the end");
-					}		
+						// printf("	file position: %d 	fsize:%d\n", fsize, fsize);
+					} else {
+						// printf("	file position: %d 	fsize:%d\n", file_base, fsize);
+					}
 
 					if (base == nextSeqNum) {
 						alarm(0);
@@ -307,26 +315,29 @@ void io_handler(int sig)
 					if (noPacketLoss()) {
 						sb = sendto(sockfd, fbuf, HEADER_SIZE + bytesread, 0,
 							(struct sockaddr *)&their_addr, sizeof(their_addr));
-						printf("sent: SEQ # %d\n", nextSeqNum);
+						printf("sent: SEQ # %d", nextSeqNum);
 					} else {
-						printf("**Packet with SEQ # %d was sent but lost**\n", nextSeqNum);
+						printf("\n*** Packet with SEQ # %d was lost ***\n", nextSeqNum);
 					}
 
 					if ((int)fbuf[8] == 1) {
-						printf("*** Sent last packet with %d bytes\n", bytesread);
+						printf("\n*** Sent last packet with %d bytes ***\n", bytesread);
 						doneWriting = 1;
 					}
-					
-					// if (base == nextSeqNum) {
-					if (base == nextSeqNum || nextSeqNum < cwnd) {
+
+					if (base == nextSeqNum) {
 						alarm(TIMEOUT);
 					}
+
 					nextSeqNum = (nextSeqNum + HEADER_SIZE + bytesread) % MAXSEQNUMS;
+
+					printf("		new base: %d     end of window: %d     next SEQ #: %d\n", base, base + cwnd, nextSeqNum);
+
 					total_payload_sent += bytesread;
 					
 					bzero(fbuf, PACKET_SIZE);
 				} else { 
-					printf("Nothing to read, bytesread: %d\n", bytesread);
+					printf("Nothing to read, bytes read: %d\n", bytesread);
 				}
 			}
 
@@ -337,7 +348,7 @@ void io_handler(int sig)
 				fbuf[8] = (char)2;
 				sendto(sockfd, fbuf, HEADER_SIZE, 0,
 						(struct sockaddr *)&their_addr, sizeof(their_addr));
-				printf("\nFile transfer complete. Sent %d of %d bytes\n", fsize, fsize);
+				printf("\n*** File transfer complete. Sent %d of %d bytes ***\n", fsize, fsize);
 				
 				close(sockfd);
 				close(sendfd);
@@ -353,7 +364,7 @@ void catch_alarm(int sig)
 		printf("Recieved unrecognized signal\n");
 		return;
 	}
-	printf("**Packet with seq # %d TIMEOUT**\n", base);
+	printf("*** Packet with seq # %d TIMEOUT ***\n", base);
 
 	// Reset alarm
 	alarm(TIMEOUT);
@@ -381,27 +392,43 @@ void catch_alarm(int sig)
 			if (noPacketLoss()) {
 				sb = sendto(sockfd, fbuf, HEADER_SIZE + bytesread, 0,
 					(struct sockaddr *)&their_addr, sizeof(their_addr));
-				printf("sent: SEQ # %d\n", nextSeqNum);
+				printf("sent: SEQ # %d", nextSeqNum);
 			} else {
-				printf("**Packet with SEQ # %d was sent but lost**\n", nextSeqNum);
+				printf("\n*** Packet with SEQ # %d was sent but lost ***\n", nextSeqNum);
 			}
 
 			if ((int)fbuf[8] == 1) {
-				printf("*** Sent last packet with %d bytes\n", bytesread);
+				printf("\n*** Sent last packet with %d bytes ***\n", bytesread);
 				doneWriting = 1;
 			}
 			
-			// if (base == nextSeqNum) {
-			if (base == nextSeqNum || nextSeqNum < cwnd) {
+			if (base == nextSeqNum) {
 				alarm(TIMEOUT);
 			}
 			nextSeqNum = (nextSeqNum + HEADER_SIZE + bytesread) % MAXSEQNUMS;
+
+			printf("		new base: %d     end of window: %d     next SEQ #: %d\n", base, base + cwnd, nextSeqNum);
+
 			total_payload_sent += bytesread;
 			
 			bzero(fbuf, PACKET_SIZE);
 		} else { 
-			printf("Nothing to read, bytesread: %d\n", bytesread);
+			printf("Nothing to read, bytes read: %d\n", bytesread);
 		}
+	}
+
+	if (finished) {
+		int i = 0;
+		memcpy(fbuf, (char *)&nextSeqNum, 4);
+		memcpy(fbuf+4, &i, 4);
+		fbuf[8] = (char)2;
+		sendto(sockfd, fbuf, HEADER_SIZE, 0,
+				(struct sockaddr *)&their_addr, sizeof(their_addr));
+		printf("\n*** File transfer complete. Sent %d of %d bytes ***\n", fsize, fsize);
+		
+		close(sockfd);
+		close(sendfd);
+		exit(0);
 	}
 }
 

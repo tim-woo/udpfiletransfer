@@ -164,10 +164,16 @@ int main(int argc, char *argv[])
 			exit(1);
 		}
 
+		if ((int)buf[8] == 4) {
+			printf("File not found on server\n");
+			exit(1);
+		}
+
+
 		unsigned packetSeqNum = 0;
 		memcpy(&packetSeqNum, buf, 4);
 		if (notCorrupt(probcorrupt)) {
-			printf("rcv : SEQ %d 			expected: %d\n", packetSeqNum, expectedSeqNum);
+			printf("recv: SEQ %d 			expected: %d\n", packetSeqNum, expectedSeqNum);
 			if (expectedSeqNum == packetSeqNum) {
 				if ((int)buf[8] == 1) {
 					printf("recv: last_packet\n");
@@ -212,6 +218,10 @@ int main(int argc, char *argv[])
 				bzero(ackPacket, PACKET_SIZE);
 			}
 			else {
+				if (expectedSeqNum == 0) {
+					continue;
+				}
+
 				ackPacket[0] = ACK;
 				memcpy(ackPacket+1, &lastReceivedSeqNum, 4);
 				if ((numbytes = sendto(sockfd, ackPacket, PACKET_SIZE, 0,
