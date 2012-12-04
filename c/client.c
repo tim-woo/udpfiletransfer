@@ -25,7 +25,6 @@
 int noPacketLoss(int probloss) {
 	int r = rand()%100;
 	if (r < probloss) {
-		// printf("ACK lost\n");
 		return 0;	// packet loss
 	}
 	else {
@@ -36,7 +35,6 @@ int noPacketLoss(int probloss) {
 int notCorrupt(int probcorrupt) {
 	int r = rand()%100;
 	if (r < probcorrupt) {
-		// printf("Packet received is corrupt\n");
 		return 0;	// corrupted file
 	}
 	else {
@@ -71,6 +69,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "Probability X/100 must be greater than 0.\n");
 	}
 
+	// DNS Lookup
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_DGRAM;
@@ -119,10 +118,6 @@ int main(int argc, char *argv[])
 		return 2;
 	}
 
-	// FOR BINDING - NOT REALLY NEEDED
-	struct sockaddr_in serv_addr;
-	bzero((char *) &serv_addr, sizeof(serv_addr));
-
 	// SEND FILE REQUEST
 	bzero(fname, PACKET_SIZE);
 	fname[0] = REQ;
@@ -145,13 +140,12 @@ int main(int argc, char *argv[])
 	// PREPARE FOR GO-BACK-N PROTOCOL
 	unsigned int expectedSeqNum = 0;
 	unsigned int lastReceivedSeqNum = 0;
-	int addr_len;
 	unsigned int last_packet = 0;
+
 	char buf[PACKET_SIZE];
 	bzero(buf, PACKET_SIZE);
 	char ackPacket[PACKET_SIZE];
 	bzero(ackPacket, PACKET_SIZE);
-	addr_len = sizeof(serv_addr);
 
 	printf("Waiting for response...\n");
 
@@ -164,30 +158,34 @@ int main(int argc, char *argv[])
 			exit(1);
 		}
 
+		// File not found
 		if ((int)buf[8] == 4) {
 			printf("File not found on server\n");
 			exit(1);
 		}
 
-
 		unsigned packetSeqNum = 0;
 		memcpy(&packetSeqNum, buf, 4);
+
 		if (notCorrupt(probcorrupt)) {
-			printf("recv: SEQ %d 			expected: %d\n", packetSeqNum, expectedSeqNum);
+			printf("recv: SEQ # %d 			expected: %d\n", packetSeqNum, expectedSeqNum);
 			if (expectedSeqNum == packetSeqNum) {
+				
+				// Header processing
 				if ((int)buf[8] == 1) {
 					printf("recv: last_packet\n");
 					last_packet = 1;
 				}
 				else if ((int)buf[8] == 2) {
-					printf("File transfer complete.\n");
+					printf("*** File transfer complete. ***\n");
 					break;
 				}
 				
+				// Write data to file
 				unsigned int payload_size = 0;
 				memcpy(&payload_size, buf+4, 4);
 				unsigned int bytesWrote = 0;
-				// WRITE TO FILE
+
 				if (bytesWrote = write(fd, buf+HEADER_SIZE, payload_size) < 0) {
 					perror("write error");
 					exit(1);
@@ -197,7 +195,7 @@ int main(int argc, char *argv[])
 				ackPacket[0] = ACK;
 				memcpy(ackPacket+1, &expectedSeqNum, 4);
 
-				// SEND ACK
+				// Send ACK with simulated packet loss
 				if (noPacketLoss(probloss) == 1) {
 				 	if ((numbytes = sendto(sockfd, ackPacket, PACKET_SIZE, 0,
 							 p->ai_addr, p->ai_addrlen)) == -1) {
@@ -205,7 +203,7 @@ int main(int argc, char *argv[])
 						exit(1);
 					}
 				} else {
-					printf("**ACK # %d was sent but lost**\n", expectedSeqNum);
+					printf("*** ACK # %d was sent but lost ***\n", expectedSeqNum);
 				}
 
 				printf("sent: ACK # %d\n", expectedSeqNum);
@@ -217,11 +215,15 @@ int main(int argc, char *argv[])
 				bzero(buf, PACKET_SIZE);
 				bzero(ackPacket, PACKET_SIZE);
 			}
+
+			// Bad sequence number
 			else {
+				// If we don't receive first packet, don't send first ACK
 				if (expectedSeqNum == 0) {
 					continue;
 				}
 
+				// Resend previous ACK
 				ackPacket[0] = ACK;
 				memcpy(ackPacket+1, &lastReceivedSeqNum, 4);
 				if ((numbytes = sendto(sockfd, ackPacket, PACKET_SIZE, 0,
@@ -232,12 +234,15 @@ int main(int argc, char *argv[])
 				printf("sent: ACK # %d\n", lastReceivedSeqNum);
 				bzero(ackPacket, PACKET_SIZE);
 			}
-		} else {
-			printf("**Packet with seq # %d CORRUPTED**\n", packetSeqNum);
+		} 
+		// "Corrupted" packet - do nothing
+		else {
+			printf("*** Packet with seq # %d CORRUPTED ***\n", packetSeqNum);
 			bzero(buf, PACKET_SIZE);
 		}
 	}
 
+	// Cleanup
 	freeaddrinfo(servinfo);
 	close(sockfd);
 	close(fd);
