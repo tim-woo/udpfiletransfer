@@ -270,7 +270,7 @@ void io_handler(int sig)
 			// Receive ACK
 			else if (type == ACK) {
 				memcpy(&ack_num, pbuf + 1, 4);
-				
+
 				if (notCorrupt()) {
 					printf("recv: ACK # %d", ack_num);
 					int cnt = 0;
@@ -306,12 +306,16 @@ void io_handler(int sig)
 				}
 			}
 
+			// Send packets while there is room in cwnd
 			while (!doneWriting && expectedType == ACK && checkNextSeq(nextSeqNum,base,cwnd)==1) {
+				// Read file data
 				if ((bytesread = read(sendfd, fbuf + HEADER_SIZE, PAYLOAD_SIZE)) > 0) {
+					// Header
 					memcpy(fbuf, (char *)&nextSeqNum, 4);
 					memcpy(fbuf+4, &bytesread, 4);
 					fbuf[8] = (char)((fsize == total_payload_sent+bytesread) ? 1 : 0);				
 
+					// Simulated packet loss
 					if (noPacketLoss()) {
 						sb = sendto(sockfd, fbuf, HEADER_SIZE + bytesread, 0,
 							(struct sockaddr *)&their_addr, sizeof(their_addr));
@@ -325,16 +329,17 @@ void io_handler(int sig)
 						doneWriting = 1;
 					}
 
+					// Set timeout for base packet
 					if (base == nextSeqNum) {
 						alarm(TIMEOUT);
 					}
 
+					// Update sequence number and payload
 					nextSeqNum = (nextSeqNum + HEADER_SIZE + bytesread) % MAXSEQNUMS;
+					total_payload_sent += bytesread;
 
 					printf("		new base: %d     end of window: %d     next SEQ #: %d\n", base, base + cwnd, nextSeqNum);
 
-					total_payload_sent += bytesread;
-					
 					bzero(fbuf, PACKET_SIZE);
 				} else { 
 					printf("Nothing to read, bytes read: %d\n", bytesread);
@@ -342,10 +347,12 @@ void io_handler(int sig)
 			}
 
 			if (finished) {
+				// Header info for last packet
 				int i = 0;
 				memcpy(fbuf, (char *)&nextSeqNum, 4);
 				memcpy(fbuf+4, &i, 4);
 				fbuf[8] = (char)2;
+
 				sendto(sockfd, fbuf, HEADER_SIZE, 0,
 						(struct sockaddr *)&their_addr, sizeof(their_addr));
 				printf("\n*** File transfer complete. Sent %d of %d bytes ***\n", fsize, fsize);
@@ -377,10 +384,8 @@ void catch_alarm(int sig)
 	total_payload_sent = file_base; // restarts sending from file_base
 	nextSeqNum = base;
 
-
 	int bytesread, sb;
 	char fbuf[PACKET_SIZE];
-
 	bzero(fbuf, PACKET_SIZE);
 
 	while (!doneWriting && expectedType == ACK && checkNextSeq(nextSeqNum,base,cwnd)==1) {
@@ -431,14 +436,3 @@ void catch_alarm(int sig)
 		exit(0);
 	}
 }
-
-
-
-
-
-
-
-
-
-
-
